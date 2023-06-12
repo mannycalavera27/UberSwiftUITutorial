@@ -10,7 +10,6 @@ import MapKit
 
 struct UberMapViewRepresentable: UIViewRepresentable {
     let mapView = MKMapView()
-    let locationManager = LocationManager()
     @Binding var mapState: MapViewState
     @EnvironmentObject var locationSearchViewViewModel: LocationSearchViewViewModel
     
@@ -30,10 +29,12 @@ struct UberMapViewRepresentable: UIViewRepresentable {
             case .searchingForLocation:
                 break
             case .locationSelected:
-                if let coordinate = locationSearchViewViewModel.selectedLocationCoordinate {
+                if let coordinate = locationSearchViewViewModel.selectedUberLocation?.coordinate {
                     context.coordinator.addAndSelectAnnotation(withCoordinate: coordinate)
                     context.coordinator.configurePolyline(withDestinationCoordinate: coordinate)
                 }
+                break
+            case .polylineAdded:
                 break
         }
     }
@@ -85,35 +86,31 @@ extension UberMapViewRepresentable {
             annotation.coordinate = coordinate
             parent.mapView.addAnnotation(annotation)
             parent.mapView.selectAnnotation(annotation, animated: true)
-            parent.mapView.showAnnotations(parent.mapView.annotations, animated: true)
         }
         
         func configurePolyline(withDestinationCoordinate coordinate: CLLocationCoordinate2D) {
             guard let userLocationCoordinate = self.userLocationCoordinate else { return }
             Task {
                 do {
-                    guard let route = try await getDestinationRoute(from: userLocationCoordinate, to: coordinate) else { return }
+                    guard let route = try await parent.locationSearchViewViewModel.getDestinationRoute(
+                        from: userLocationCoordinate,
+                        to: coordinate
+                    ) else { return }
                     DispatchQueue.main.async { [weak self] in
-                        self?.parent.mapView.addOverlay(route.polyline)
+                        guard let strongSelf = self else { return }
+                        strongSelf.parent.mapView.addOverlay(route.polyline)
+                        strongSelf.parent.mapState = .polylineAdded
+                        let rect = strongSelf.parent.mapView.mapRectThatFits(
+                            route.polyline.boundingMapRect,
+                            edgePadding: .init(top: 64, left: 32, bottom: 500, right: 32)
+                        )
+                        strongSelf.parent.mapView.setRegion(.init(rect), animated: true)
                     }
                 } catch {
                     print("DEBUG: Failed to get directions with error: \(error.localizedDescription)")
                 }
             }
             
-        }
-        
-        func getDestinationRoute(
-            from userLocation: CLLocationCoordinate2D,
-            to destination: CLLocationCoordinate2D
-        ) async throws -> MKRoute? {
-            let userPlacemark = MKPlacemark(coordinate: userLocation)
-            let destinationPlacemark = MKPlacemark(coordinate: destination)
-            let request = MKDirections.Request()
-            request.source = MKMapItem(placemark: userPlacemark)
-            request.destination = MKMapItem(placemark: destinationPlacemark)
-            let directions = MKDirections(request: request)
-            return try await directions.calculate().routes.first
         }
         
         func clearMapViewAndRecenterOnUserLocation() {
